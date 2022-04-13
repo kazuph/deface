@@ -29,7 +29,6 @@ class CenterFace:
                 backend = 'opencv'
         self.backend = backend
 
-
         if self.backend == 'opencv':
             self.net = cv2.dnn.readNetFromONNX(onnx_path)
         elif self.backend == 'onnxrt':
@@ -41,10 +40,15 @@ class CenterFace:
 
             static_model = onnx.load(onnx_path)
             dyn_model = self.dynamicize_shapes(static_model)
-            self.sess = onnxruntime.InferenceSession(dyn_model.SerializeToString(), providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+            self.sess = onnxruntime.InferenceSession(
+                dyn_model.SerializeToString(),
+                providers=['TensorrtExecutionProvider',
+                           'CUDAExecutionProvider', 'CPUExecutionProvider']
+            )
 
             preferred_provider = self.sess.get_providers()[0]
-            preferred_device = 'GPU' if preferred_provider.startswith('CUDA') else 'CPU'
+            preferred_device = 'GPU' if preferred_provider.startswith(
+                'CUDA') else 'CPU'
             # print(f'Running on {preferred_device}.')
 
     @staticmethod
@@ -67,7 +71,8 @@ class CenterFace:
             '539': ['B', 2, 'h', 'w'],  # offset
             '540': ['B', 10, 'h', 'w']  # landmarks
         })
-        dyn_model = update_inputs_outputs_dims(static_model, input_dims, output_dims)
+        dyn_model = update_inputs_outputs_dims(
+            static_model, input_dims, output_dims)
         return dyn_model
 
     def __call__(self, img, threshold=0.5):
@@ -75,7 +80,8 @@ class CenterFace:
         if self.in_shape is None:
             self.in_shape = self.orig_shape[::-1]
         if not hasattr(self, 'h_new'):  # First call, need to compute sizes
-            self.w_new, self.h_new, self.scale_w, self.scale_h = self.transform(self.in_shape)
+            self.w_new, self.h_new, self.scale_w, self.scale_h = self.transform(
+                self.in_shape)
 
         blob = cv2.dnn.blobFromImage(
             img, scalefactor=1.0, size=(self.w_new, self.h_new),
@@ -83,15 +89,20 @@ class CenterFace:
         )
         if self.backend == 'opencv':
             self.net.setInput(blob)
-            heatmap, scale, offset, lms = self.net.forward(self.onnx_output_names)
+            heatmap, scale, offset, lms = self.net.forward(
+                self.onnx_output_names)
         elif self.backend == 'onnxrt':
-            heatmap, scale, offset, lms = self.sess.run(self.onnx_output_names, {self.onnx_input_name: blob})
+            heatmap, scale, offset, lms = self.sess.run(
+                self.onnx_output_names, {self.onnx_input_name: blob})
         else:
             raise RuntimeError(f'Unknown backend {self.backend}')
-        dets, lms = self.decode(heatmap, scale, offset, lms, (self.h_new, self.w_new), threshold=threshold)
+        dets, lms = self.decode(
+            heatmap, scale, offset, lms, (self.h_new, self.w_new), threshold=threshold)
         if len(dets) > 0:
-            dets[:, 0:4:2], dets[:, 1:4:2] = dets[:, 0:4:2] / self.scale_w, dets[:, 1:4:2] / self.scale_h
-            lms[:, 0:10:2], lms[:, 1:10:2] = lms[:, 0:10:2] / self.scale_w, lms[:, 1:10:2] / self.scale_h
+            dets[:, 0:4:2], dets[:, 1:4:2] = dets[:, 0:4:2] / \
+                self.scale_w, dets[:, 1:4:2] / self.scale_h
+            lms[:, 0:10:2], lms[:, 1:10:2] = lms[:, 0:10:2] / \
+                self.scale_w, lms[:, 1:10:2] / self.scale_h
         else:
             dets = np.empty(shape=[0, 5], dtype=np.float32)
             lms = np.empty(shape=[0, 10], dtype=np.float32)
@@ -102,7 +113,8 @@ class CenterFace:
         h_orig, w_orig = self.orig_shape
         w_new, h_new = in_shape
         # Make spatial dims divisible by 32
-        w_new, h_new = int(np.ceil(w_new / 32) * 32), int(np.ceil(h_new / 32) * 32)
+        w_new, h_new = int(np.ceil(w_new / 32) *
+                           32), int(np.ceil(h_new / 32) * 32)
         scale_w, scale_h = w_new / w_orig, h_new / h_orig
         return w_new, h_new, scale_w, scale_h
 
@@ -114,12 +126,15 @@ class CenterFace:
         boxes, lms = [], []
         if len(c0) > 0:
             for i in range(len(c0)):
-                s0, s1 = np.exp(scale0[c0[i], c1[i]]) * 4, np.exp(scale1[c0[i], c1[i]]) * 4
+                s0, s1 = np.exp(scale0[c0[i], c1[i]]) * \
+                    4, np.exp(scale1[c0[i], c1[i]]) * 4
                 o0, o1 = offset0[c0[i], c1[i]], offset1[c0[i], c1[i]]
                 s = heatmap[c0[i], c1[i]]
-                x1, y1 = max(0, (c1[i] + o1 + 0.5) * 4 - s1 / 2), max(0, (c0[i] + o0 + 0.5) * 4 - s0 / 2)
+                x1, y1 = max(0, (c1[i] + o1 + 0.5) * 4 - s1 /
+                             2), max(0, (c0[i] + o0 + 0.5) * 4 - s0 / 2)
                 x1, y1 = min(x1, size[1]), min(y1, size[0])
-                boxes.append([x1, y1, min(x1 + s1, size[1]), min(y1 + s0, size[0]), s])
+                boxes.append([x1, y1, min(x1 + s1, size[1]),
+                             min(y1 + s0, size[0]), s])
                 lm = []
                 for j in range(5):
                     lm.append(landmark[0, j * 2 + 1, c0[i], c1[i]] * s1 + x1)
